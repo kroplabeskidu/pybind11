@@ -820,3 +820,16 @@ def test_cast_unregistered_type():
 def test_cast_null_result():
     with pytest.raises(RuntimeError, match="Unable to convert .* to Python object"):
         m.cast_null_result()
+
+
+def test_instantiate_pybind11_object_base():
+    base = m.NoConstructor.__base__
+    assert base.__name__.startswith("pybind11_object")
+    with pytest.raises(TypeError, match="no pybind11-registered base types"):
+        base()
+
+    class Derived(base):
+        pass
+
+    with pytest.raises(TypeError, match="no pybind11-registered base types"):
+        Derived()
