@@ -112,24 +112,66 @@ struct OldStyleInit {
     virtual int v_data() const { return m_data; }
 };
 
+#if !defined(PYPY_VERSION) && !defined(GRAALVM_PYTHON) && !defined(Py_LIMITED_API)
+namespace {
+// test_instance_allocation_failure
+PyObject *call_with_failing_calloc(PyObject *type) {
+    PyMemAllocatorEx orig;
+    PyMem_GetAllocator(PYMEM_DOMAIN_MEM, &orig);
+    PyMemAllocatorEx failing = orig;
+    failing.calloc = [](void *, size_t, size_t) -> void * { return nullptr; };
+    PyMem_SetAllocator(PYMEM_DOMAIN_MEM, &failing);
+    PyObject *result = PyObject_CallObject(type, nullptr);
+    PyMem_SetAllocator(PYMEM_DOMAIN_MEM, &orig);
+    return result;
+}
+} // namespace
+#endif
+
 TEST_SUBMODULE(class_, m) {
     m.def("obj_class_name", [](py::handle obj) { return py::detail::obj_class_name(obj.ptr()); });
 
 #if !defined(PYPY_VERSION) && !defined(GRAALVM_PYTHON) && !defined(Py_LIMITED_API)
     // test_instance_allocation_failure
     m.def("call_with_failing_calloc", [](py::handle type) {
-        PyMemAllocatorEx orig;
-        PyMem_GetAllocator(PYMEM_DOMAIN_MEM, &orig);
-        PyMemAllocatorEx failing = orig;
-        failing.calloc = [](void *, size_t, size_t) -> void * { return nullptr; };
-        PyMem_SetAllocator(PYMEM_DOMAIN_MEM, &failing);
-        PyObject *result = PyObject_CallObject(type.ptr(), nullptr);
-        PyMem_SetAllocator(PYMEM_DOMAIN_MEM, &orig);
+        PyObject *result = call_with_failing_calloc(type.ptr());
         if (result == nullptr) {
             throw py::error_already_set();
         }
         return py::reinterpret_steal<py::object>(result);
     });
+
+#    if PY_VERSION_HEX >= 0x030D0000
+    // Returns how many instances of `type` the interpreter saw created and destroyed.
+    m.def("ref_events_with_failing_calloc", [](py::handle type) {
+        struct Counts {
+            PyTypeObject *type;
+            int created;
+            int destroyed;
+        };
+        Counts counts{reinterpret_cast<PyTypeObject *>(type.ptr()), 0, 0};
+        void *orig_data = nullptr;
+        PyRefTracer orig = PyRefTracer_GetTracer(&orig_data);
+        PyRefTracer_SetTracer(
+            [](PyObject *op, PyRefTracerEvent event, void *data) -> int {
+                auto *c = static_cast<Counts *>(data);
+                if (Py_TYPE(op) == c->type) {
+                    if (event == PyRefTracer_CREATE) {
+                        ++c->created;
+                    } else if (event == PyRefTracer_DESTROY) {
+                        ++c->destroyed;
+                    }
+                }
+                return 0;
+            },
+            &counts);
+        PyObject *result = call_with_failing_calloc(type.ptr());
+        PyErr_Clear();
+        Py_XDECREF(result);
+        PyRefTracer_SetTracer(orig, orig_data);
+        return py::make_tuple(counts.created, counts.destroyed);
+    });
+#    endif
 #endif
 
     // test_instance

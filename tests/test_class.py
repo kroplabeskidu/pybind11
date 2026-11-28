@@ -855,3 +855,7 @@ def test_instance_allocation_failure():
 
     gc.collect()
     assert not any(type(o) is Derived for o in gc.get_objects())
+
+    if hasattr(m, "ref_events_with_failing_calloc"):
+        created, destroyed = m.ref_events_with_failing_calloc(Derived)
+        assert created == destroyed

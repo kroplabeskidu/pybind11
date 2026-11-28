@@ -225,7 +225,7 @@ public:
  * The returned object should be short-lived: in particular, it must not outlive the called-upon
  * instance.
  */
-// (get_value_and_holder, allocate_layout, and deallocate_layout are declared inside
+// (get_value_and_holder, allocate_layout, init_layout, and deallocate_layout are declared inside
 // struct instance in detail/common.h; definitions are in type_caster_base-inl.h.)
 
 PYBIND11_WARNING_PUSH

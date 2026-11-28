@@ -364,7 +364,7 @@ instance::get_value_and_holder(const type_info *find_type /*= nullptr default in
 #endif
 }
 
-PYBIND11_NOINLINE_ATTR PYBIND11_INLINE void
+PYBIND11_NOINLINE_ATTR PYBIND11_INLINE nonsimple_values_and_holders
 instance::allocate_layout(const std::vector<type_info *> &tinfo) {
     const size_t n_types = tinfo.size();
 
@@ -373,40 +373,46 @@ instance::allocate_layout(const std::vector<type_info *> &tinfo) {
             "instance allocation failed: new instance has no pybind11-registered base types");
     }
 
-    simple_layout
-        = n_types == 1 && tinfo.front()->holder_size_in_ptrs <= instance_simple_holder_in_ptrs();
-
     // Simple path: no python-side multiple inheritance, and a small-enough holder
+    if (n_types == 1 && tinfo.front()->holder_size_in_ptrs <= instance_simple_holder_in_ptrs()) {
+        return {nullptr, nullptr};
+    }
+
+    // multiple base types or a too-large holder
+    // Allocate space to hold: [v1*][h1][v2*][h2]...[bb...] where [vN*] is a value pointer,
+    // [hN] is the (uninitialized) holder instance for value N, and [bb...] is a set of bool
+    // values that tracks whether each associated holder has been initialized.  Each [block] is
+    // padded, if necessary, to an integer multiple of sizeof(void *).
+    size_t space = 0;
+    for (auto *t : tinfo) {
+        space += 1;                      // value pointer
+        space += t->holder_size_in_ptrs; // holder instance
+    }
+    size_t flags_at = space;
+    space += size_in_ptrs(n_types); // status bytes (holder_constructed and
+                                    // instance_registered)
+
+    // Allocate space for flags, values, and holders, and initialize it to 0 (flags and values,
+    // in particular, need to be 0).  Use Python's memory allocation
+    // functions: Python is using pymalloc, which is designed to be
+    // efficient for small allocations like the one we're doing here;
+    // for larger allocations they are just wrappers around malloc.
+    // TODO: is this still true for pure Python 3.6?
+    auto **values_and_holders = static_cast<void **>(PyMem_Calloc(space, sizeof(void *)));
+    if (!values_and_holders) {
+        throw std::bad_alloc();
+    }
+    return {values_and_holders, reinterpret_cast<std::uint8_t *>(&values_and_holders[flags_at])};
+}
+
+PYBIND11_INLINE void instance::init_layout(const nonsimple_values_and_holders &storage) noexcept {
+    simple_layout = storage.values_and_holders == nullptr;
     if (simple_layout) {
         simple_value_holder[0] = nullptr;
         simple_holder_constructed = false;
         simple_instance_registered = false;
-    } else { // multiple base types or a too-large holder
-        // Allocate space to hold: [v1*][h1][v2*][h2]...[bb...] where [vN*] is a value pointer,
-        // [hN] is the (uninitialized) holder instance for value N, and [bb...] is a set of bool
-        // values that tracks whether each associated holder has been initialized.  Each [block] is
-        // padded, if necessary, to an integer multiple of sizeof(void *).
-        size_t space = 0;
-        for (auto *t : tinfo) {
-            space += 1;                      // value pointer
-            space += t->holder_size_in_ptrs; // holder instance
-        }
-        size_t flags_at = space;
-        space += size_in_ptrs(n_types); // status bytes (holder_constructed and
-                                        // instance_registered)
-
-        // Allocate space for flags, values, and holders, and initialize it to 0 (flags and values,
-        // in particular, need to be 0).  Use Python's memory allocation
-        // functions: Python is using pymalloc, which is designed to be
-        // efficient for small allocations like the one we're doing here;
-        // for larger allocations they are just wrappers around malloc.
-        // TODO: is this still true for pure Python 3.6?
-        nonsimple.values_and_holders = static_cast<void **>(PyMem_Calloc(space, sizeof(void *)));
-        if (!nonsimple.values_and_holders) {
-            throw std::bad_alloc();
-        }
-        nonsimple.status
-            = reinterpret_cast<std::uint8_t *>(&nonsimple.values_and_holders[flags_at]);
+    } else {
+        nonsimple = storage;
     }
     owned = true;
     old_style_init_active = false;

@@ -727,23 +727,15 @@ PYBIND11_INLINE PyObject *make_new_instance(PyTypeObject *type,
         type->tp_basicsize = instance_size;
     }
 #endif
+    // Allocate the value/holder internals before the object. A failure after tp_alloc would
+    // need tp_dealloc, which is not safe on an instance without a layout.
+    auto storage = instance::allocate_layout(bases);
     PyObject *self = type_alloc(type);
     if (self == nullptr) {
+        PyMem_Free(reinterpret_cast<void *>(storage.values_and_holders));
         throw error_already_set();
     }
-    auto *inst = get_instance(self);
-    // Allocate the value/holder internals:
-    try {
-        inst->allocate_layout(bases);
-    } catch (...) {
-        // The layout is incomplete, so release the object without running tp_dealloc.
-        if (PyType_HasFeature(type, Py_TPFLAGS_HAVE_GC) != 0) {
-            PyObject_GC_UnTrack(self);
-        }
-        type_free(type, self);
-        Py_DECREF(reinterpret_cast<PyObject *>(type));
-        throw;
-    }
+    get_instance(self)->init_layout(storage);
 
     return self;
 }

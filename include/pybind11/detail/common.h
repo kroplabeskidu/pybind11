@@ -846,9 +846,12 @@ struct instance {
     PyObject *dict;
 #endif
 
+    /// Allocates the non-simple storage for `tinfo`. The result is null for the simple layout.
+    static nonsimple_values_and_holders allocate_layout(const std::vector<type_info *> &tinfo);
+
     /// Initializes all of the above type/values/holders data (but not the instance values
-    /// themselves)
-    void allocate_layout(const std::vector<type_info *> &tinfo);
+    /// themselves) and takes ownership of `storage` from allocate_layout()
+    void init_layout(const nonsimple_values_and_holders &storage) noexcept;
 
     /// Destroys/deallocates all of the above
     void deallocate_layout();
